@@ -1,0 +1,170 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+
+import '../scanner_provider.dart';
+import '../types.dart';
+
+/// Zebra DataWedge barcode provider.
+class ZebraBarcodeProvider implements BarcodeScannerProvider {
+  ZebraBarcodeProvider({
+    @visibleForTesting MethodChannel? methodChannel,
+    @visibleForTesting EventChannel? eventChannel,
+  })  : _methodChannel = methodChannel ??
+            const MethodChannel('scanner_bridge/zebra_barcode'),
+        _eventChannel = eventChannel ??
+            const EventChannel('scanner_bridge/zebra_barcode/events');
+
+  final MethodChannel _methodChannel;
+  final EventChannel _eventChannel;
+  final StreamController<BarcodeScanResult> _resultsController =
+      StreamController<BarcodeScanResult>.broadcast();
+  final StreamController<ScannerStatus> _statusController =
+      StreamController<ScannerStatus>.broadcast();
+  final StreamController<ScannerBridgeException> _errorsController =
+      StreamController<ScannerBridgeException>.broadcast();
+
+  StreamSubscription<dynamic>? _eventSubscription;
+  bool _initialized = false;
+
+  @override
+  ScannerProviderType get type => ScannerProviderType.zebra;
+
+  @override
+  Future<bool> isAvailable() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      return await _methodChannel.invokeMethod<bool>('isAvailable') ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  @override
+  Future<ScannerCapabilities> initialize() async {
+    if (!await isAvailable()) {
+      const error = ScannerBridgeException(
+        'zebra_unavailable',
+        'Zebra DataWedge is not available on this device.',
+      );
+      _statusController.add(ScannerStatus.unavailable);
+      _errorsController.add(error);
+      throw error;
+    }
+    _eventSubscription ??= _eventChannel.receiveBroadcastStream().listen(
+      _handleEvent,
+      onError: (Object error, StackTrace stackTrace) {
+        _statusController.add(ScannerStatus.error);
+        _errorsController.add(
+          ScannerBridgeException(
+            'zebra_event_stream_error',
+            'The Zebra scanner event stream failed: $error',
+          ),
+        );
+      },
+    );
+    _initialized = true;
+    return const ScannerCapabilities(
+      provider: ScannerProviderType.zebra,
+      features: {ScannerFeature.barcode},
+    );
+  }
+
+  @override
+  Future<void> start() async {
+    _ensureInitialized();
+    try {
+      await _methodChannel.invokeMethod<void>('start');
+    } on PlatformException catch (error) {
+      final bridgeError = ScannerBridgeException(
+        error.code,
+        error.message ?? 'Unable to start Zebra DataWedge.',
+      );
+      _statusController.add(ScannerStatus.error);
+      _errorsController.add(bridgeError);
+      throw bridgeError;
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    if (!_initialized) {
+      return;
+    }
+    await _methodChannel.invokeMethod<void>('stop');
+  }
+
+  @override
+  Stream<BarcodeScanResult> get results => _resultsController.stream;
+
+  @override
+  Stream<ScannerStatus> get status => _statusController.stream;
+
+  @override
+  Stream<ScannerBridgeException> get errors => _errorsController.stream;
+
+  @override
+  Widget buildView({Key? key}) => SizedBox(key: key);
+
+  @override
+  Future<void> dispose() async {
+    await _eventSubscription?.cancel();
+    await _resultsController.close();
+    await _statusController.close();
+    await _errorsController.close();
+    _initialized = false;
+  }
+
+  void _handleEvent(dynamic event) {
+    if (event is! Map) {
+      return;
+    }
+    final eventType = event['event']?.toString();
+    if (eventType == 'barcode') {
+      final value = event['value']?.toString();
+      if (value == null || value.isEmpty) {
+        return;
+      }
+      _resultsController.add(
+        BarcodeScanResult(
+          value: value,
+          format: event['format']?.toString(),
+          source: ScannerProviderType.zebra,
+        ),
+      );
+      return;
+    }
+    if (eventType == 'status') {
+      _statusController.add(_mapStatus(event['status']?.toString()));
+    }
+  }
+
+  ScannerStatus _mapStatus(String? value) {
+    switch (value?.toUpperCase()) {
+      case 'WAITING':
+      case 'CONNECTED':
+        return ScannerStatus.ready;
+      case 'SCANNING':
+        return ScannerStatus.scanning;
+      case 'IDLE':
+        return ScannerStatus.stopped;
+      case 'DISABLED':
+      case 'DISCONNECTED':
+        return ScannerStatus.unavailable;
+      default:
+        return ScannerStatus.unknown;
+    }
+  }
+
+  void _ensureInitialized() {
+    if (!_initialized) {
+      throw StateError('Initialize the Zebra provider before starting it.');
+    }
+  }
+}
