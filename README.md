@@ -83,6 +83,22 @@ The Android provider uses Zebra DataWedge intents and does not bundle Zebra's
 proprietary SDK binaries. A Zebra device must have DataWedge installed and
 enabled. The camera fallback uses `mobile_scanner`.
 
+## Example app
+
+The repository includes an independent real-device test app under `example/`.
+It forces the camera provider and displays provider capabilities, normalized
+status/error events, the last barcode and accepted scan count.
+
+```bash
+cd example
+flutter pub get
+flutter run -d <device-id>
+```
+
+For manual checks, including camera permission denial, app background/resume,
+start/stop and duplicate barcode suppression, see
+[example/README.md](example/README.md).
+
 ## Camera permissions
 
 When the camera provider can be selected, add the camera usage description to
