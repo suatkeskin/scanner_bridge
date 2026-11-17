@@ -12,13 +12,16 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
   ZebraBarcodeProvider({
     @visibleForTesting MethodChannel? methodChannel,
     @visibleForTesting EventChannel? eventChannel,
+    @visibleForTesting Stream<dynamic>? eventStream,
   })  : _methodChannel = methodChannel ??
             const MethodChannel('scanner_bridge/zebra_barcode'),
         _eventChannel = eventChannel ??
-            const EventChannel('scanner_bridge/zebra_barcode/events');
+            const EventChannel('scanner_bridge/zebra_barcode/events'),
+        _eventStream = eventStream;
 
   final MethodChannel _methodChannel;
   final EventChannel _eventChannel;
+  final Stream<dynamic>? _eventStream;
   final StreamController<BarcodeScanResult> _resultsController =
       StreamController<BarcodeScanResult>.broadcast();
   final StreamController<ScannerStatus> _statusController =
@@ -57,7 +60,8 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
       _errorsController.add(error);
       throw error;
     }
-    _eventSubscription ??= _eventChannel.receiveBroadcastStream().listen(
+    final events = _eventStream ?? _eventChannel.receiveBroadcastStream();
+    _eventSubscription ??= events.listen(
       _handleEvent,
       onError: (Object error, StackTrace stackTrace) {
         _statusController.add(ScannerStatus.error);
@@ -97,7 +101,17 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
     if (!_initialized) {
       return;
     }
-    await _methodChannel.invokeMethod<void>('stop');
+    try {
+      await _methodChannel.invokeMethod<void>('stop');
+    } on PlatformException catch (error) {
+      final bridgeError = ScannerBridgeException(
+        error.code,
+        error.message ?? 'Unable to stop Zebra DataWedge.',
+      );
+      _statusController.add(ScannerStatus.error);
+      _errorsController.add(bridgeError);
+      throw bridgeError;
+    }
   }
 
   @override
@@ -142,6 +156,19 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
     }
     if (eventType == 'status') {
       _statusController.add(_mapStatus(event['status']?.toString()));
+      return;
+    }
+    if (eventType == 'error') {
+      final command = event['command']?.toString() ?? 'unknown';
+      final result = event['result']?.toString() ?? 'unknown';
+      final resultInfo = event['resultInfo']?.toString();
+      final details = resultInfo == null ? '' : ' Details: $resultInfo';
+      final error = ScannerBridgeException(
+        'zebra_datawedge_command_failed',
+        'Zebra DataWedge command $command failed with $result.$details',
+      );
+      _statusController.add(ScannerStatus.error);
+      _errorsController.add(error);
     }
   }
 
