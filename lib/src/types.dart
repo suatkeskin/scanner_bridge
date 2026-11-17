@@ -87,6 +87,29 @@ class ScannerCapabilities {
       'ScannerCapabilities(provider: $provider, features: $features)';
 }
 
+/// Diagnostic information reported by a scanner provider.
+@immutable
+class ScannerDiagnostics {
+  const ScannerDiagnostics({
+    required this.provider,
+    this.dataWedgeVersion,
+    this.profileName,
+    this.applicationId,
+  });
+
+  /// The provider that reported the diagnostics.
+  final ScannerProviderType provider;
+
+  /// The installed Zebra DataWedge version, when reported by the device.
+  final String? dataWedgeVersion;
+
+  /// The DataWedge profile used by the provider, when applicable.
+  final String? profileName;
+
+  /// The Android application id associated with the profile.
+  final String? applicationId;
+}
+
 /// A normalized error raised by scanner_bridge.
 class ScannerBridgeException implements Exception {
   const ScannerBridgeException(this.code, this.message);

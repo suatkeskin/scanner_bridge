@@ -81,13 +81,26 @@ the app is backgrounded or its preview leaves the widget tree.
 
 The Android provider uses Zebra DataWedge intents and does not bundle Zebra's
 proprietary SDK binaries. A Zebra device must have DataWedge installed and
-enabled. The camera fallback uses `mobile_scanner`.
+enabled. The camera fallback uses `mobile_scanner`. In the default automatic
+mode, a Zebra initialization or start failure falls back to the camera when
+`allowCameraFallback` is enabled.
+
+Provider-specific diagnostics are available through `scanner.diagnostics`:
+
+```dart
+scanner.diagnostics.listen((diagnostics) {
+  debugPrint('DataWedge: ${diagnostics.dataWedgeVersion}');
+  debugPrint('Profile: ${diagnostics.profileName}');
+});
+```
 
 ## Example app
 
 The repository includes an independent real-device test app under `example/`.
 It forces the camera provider and displays provider capabilities, normalized
 status/error events, the last barcode and accepted scan count.
+On Zebra devices it also displays DataWedge diagnostics such as version,
+profile name and application id.
 
 ```bash
 cd example
@@ -98,6 +111,9 @@ flutter run -d <device-id>
 For manual checks, including camera permission denial, app background/resume,
 start/stop and duplicate barcode suppression, see
 [example/README.md](example/README.md).
+
+Zebra-specific device preparation and the first real-device validation
+checklist are documented in [example/README.md](example/README.md#zebra-device-preparation).
 
 ## Camera permissions
 

@@ -28,9 +28,12 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
       StreamController<ScannerStatus>.broadcast();
   final StreamController<ScannerBridgeException> _errorsController =
       StreamController<ScannerBridgeException>.broadcast();
+  final StreamController<ScannerDiagnostics> _diagnosticsController =
+      StreamController<ScannerDiagnostics>.broadcast();
 
   StreamSubscription<dynamic>? _eventSubscription;
   bool _initialized = false;
+  bool _disposed = false;
 
   @override
   ScannerProviderType get type => ScannerProviderType.zebra;
@@ -51,6 +54,9 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
 
   @override
   Future<ScannerCapabilities> initialize() async {
+    if (_disposed) {
+      throw StateError('Zebra provider has already been disposed.');
+    }
     if (!await isAvailable()) {
       const error = ScannerBridgeException(
         'zebra_unavailable',
@@ -103,6 +109,7 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
     }
     try {
       await _methodChannel.invokeMethod<void>('stop');
+      _statusController.add(ScannerStatus.stopped);
     } on PlatformException catch (error) {
       final bridgeError = ScannerBridgeException(
         error.code,
@@ -124,14 +131,22 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
   Stream<ScannerBridgeException> get errors => _errorsController.stream;
 
   @override
+  Stream<ScannerDiagnostics> get diagnostics => _diagnosticsController.stream;
+
+  @override
   Widget buildView({Key? key}) => SizedBox(key: key);
 
   @override
   Future<void> dispose() async {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
     await _eventSubscription?.cancel();
     await _resultsController.close();
     await _statusController.close();
     await _errorsController.close();
+    await _diagnosticsController.close();
     _initialized = false;
   }
 
@@ -169,6 +184,17 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
       );
       _statusController.add(ScannerStatus.error);
       _errorsController.add(error);
+      return;
+    }
+    if (eventType == 'diagnostics') {
+      _diagnosticsController.add(
+        ScannerDiagnostics(
+          provider: ScannerProviderType.zebra,
+          dataWedgeVersion: event['dataWedgeVersion']?.toString(),
+          profileName: event['profileName']?.toString(),
+          applicationId: event['applicationId']?.toString(),
+        ),
+      );
     }
   }
 
@@ -190,6 +216,9 @@ class ZebraBarcodeProvider implements BarcodeScannerProvider {
   }
 
   void _ensureInitialized() {
+    if (_disposed) {
+      throw StateError('Zebra provider has already been disposed.');
+    }
     if (!_initialized) {
       throw StateError('Initialize the Zebra provider before starting it.');
     }

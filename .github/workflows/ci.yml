@@ -58,3 +58,11 @@ jobs:
       - name: Build Android example
         working-directory: example
         run: flutter build apk --debug
+
+      - name: Test Android DataWedge command builder
+        working-directory: example/android
+        run: ./gradlew :scanner_bridge:testDebugUnitTest --no-daemon
+
+      - name: Build Android example release
+        working-directory: example
+        run: flutter build apk --release

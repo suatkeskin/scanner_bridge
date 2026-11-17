@@ -20,6 +20,8 @@ class CameraBarcodeProvider
       StreamController<ScannerStatus>.broadcast();
   final StreamController<ScannerBridgeException> _errorsController =
       StreamController<ScannerBridgeException>.broadcast();
+  final StreamController<ScannerDiagnostics> _diagnosticsController =
+      StreamController<ScannerDiagnostics>.broadcast();
   bool _initialized = false;
   bool _viewAttached = false;
   bool _startRequested = false;
@@ -77,6 +79,9 @@ class CameraBarcodeProvider
   Stream<ScannerBridgeException> get errors => _errorsController.stream;
 
   @override
+  Stream<ScannerDiagnostics> get diagnostics => _diagnosticsController.stream;
+
+  @override
   Widget buildView({Key? key}) {
     return _CameraPreview(key: key, provider: this);
   }
@@ -95,6 +100,7 @@ class CameraBarcodeProvider
     await _resultsController.close();
     await _statusController.close();
     await _errorsController.close();
+    await _diagnosticsController.close();
     _initialized = false;
   }
 

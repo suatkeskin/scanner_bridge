@@ -28,6 +28,9 @@ abstract interface class BarcodeScannerProvider {
   /// Normalized provider errors.
   Stream<ScannerBridgeException> get errors;
 
+  /// Provider-specific diagnostic information.
+  Stream<ScannerDiagnostics> get diagnostics;
+
   /// Builds the provider view when the provider needs a visual surface.
   ///
   /// Hardware providers return an empty widget. Camera providers return their
