@@ -111,6 +111,57 @@ void main() {
     await scanner.dispose();
   });
 
+  test('falls back to camera when Zebra fails to start in auto mode', () async {
+    final zebra = FakeProvider(
+      type: ScannerProviderType.zebra,
+      available: true,
+      startError: const ScannerBridgeException(
+        'zebra_start_failed',
+        'Zebra start failed.',
+      ),
+    );
+    final camera = FakeProvider(type: ScannerProviderType.camera);
+    final scanner = ScannerBridge(
+      zebraProvider: zebra,
+      cameraProvider: camera,
+      targetPlatform: TargetPlatform.android,
+    );
+
+    final capabilities = await scanner.initialize();
+    expect(capabilities.provider, ScannerProviderType.zebra);
+
+    await scanner.start();
+
+    expect(scanner.provider, ScannerProviderType.camera);
+    expect(camera.initializeCount, 1);
+    expect(camera.startCount, 1);
+    await scanner.dispose();
+  });
+
+  test('falls back to camera when Zebra initialization fails in auto mode',
+      () async {
+    final zebra = FakeProvider(
+      type: ScannerProviderType.zebra,
+      available: true,
+      initializeError: const ScannerBridgeException(
+        'zebra_initialize_failed',
+        'Zebra initialization failed.',
+      ),
+    );
+    final camera = FakeProvider(type: ScannerProviderType.camera);
+    final scanner = ScannerBridge(
+      zebraProvider: zebra,
+      cameraProvider: camera,
+      targetPlatform: TargetPlatform.android,
+    );
+
+    final capabilities = await scanner.initialize();
+
+    expect(capabilities.provider, ScannerProviderType.camera);
+    expect(camera.initializeCount, 1);
+    await scanner.dispose();
+  });
+
   group('ZebraBarcodeProvider contract', () {
     test('initializes and invokes start and stop through the method channel',
         () async {
@@ -204,9 +255,12 @@ void main() {
       final results = <BarcodeScanResult>[];
       final statuses = <ScannerStatus>[];
       final errors = <ScannerBridgeException>[];
+      final diagnostics = <ScannerDiagnostics>[];
       final resultSubscription = provider.results.listen(results.add);
       final statusSubscription = provider.status.listen(statuses.add);
       final errorSubscription = provider.errors.listen(errors.add);
+      final diagnosticsSubscription =
+          provider.diagnostics.listen(diagnostics.add);
 
       await provider.initialize();
       events
@@ -222,6 +276,12 @@ void main() {
           'command': 'SET_CONFIG',
           'result': 'FAILURE',
           'resultInfo': {'ERROR_CODE': 'PLUGIN_NOT_ALLOWED'},
+        })
+        ..add({
+          'event': 'diagnostics',
+          'dataWedgeVersion': '15.8.1',
+          'profileName': 'com.example.scanner',
+          'applicationId': 'com.example.scanner',
         });
       await pumpEventQueue();
 
@@ -234,10 +294,13 @@ void main() {
       expect(results.single.source, ScannerProviderType.zebra);
       expect(errors.single.code, 'zebra_datawedge_command_failed');
       expect(errors.single.message, contains('SET_CONFIG'));
+      expect(diagnostics.single.dataWedgeVersion, '15.8.1');
+      expect(diagnostics.single.profileName, 'com.example.scanner');
 
       await resultSubscription.cancel();
       await statusSubscription.cancel();
       await errorSubscription.cancel();
+      await diagnosticsSubscription.cancel();
       await provider.dispose();
       await events.close();
       messenger.setMockMethodCallHandler(methodChannel, null);
@@ -307,20 +370,31 @@ class FakeProvider implements BarcodeScannerProvider {
   FakeProvider({
     required this.type,
     this.available = true,
+    this.initializeError,
+    this.startError,
+    this.stopError,
   });
 
   @override
   final ScannerProviderType type;
 
   final bool available;
+  final Object? initializeError;
+  final Object? startError;
+  final Object? stopError;
   int availabilityChecks = 0;
   int initializeCount = 0;
+  int startCount = 0;
+  int stopCount = 0;
+  bool _disposed = false;
   final StreamController<BarcodeScanResult> _resultsController =
       StreamController<BarcodeScanResult>.broadcast();
   final StreamController<ScannerStatus> _statusController =
       StreamController<ScannerStatus>.broadcast();
   final StreamController<ScannerBridgeException> _errorsController =
       StreamController<ScannerBridgeException>.broadcast();
+  final StreamController<ScannerDiagnostics> _diagnosticsController =
+      StreamController<ScannerDiagnostics>.broadcast();
 
   @override
   Future<bool> isAvailable() async {
@@ -331,6 +405,9 @@ class FakeProvider implements BarcodeScannerProvider {
   @override
   Future<ScannerCapabilities> initialize() async {
     initializeCount++;
+    if (initializeError != null) {
+      throw initializeError!;
+    }
     return ScannerCapabilities(
       provider: type,
       features: const {ScannerFeature.barcode},
@@ -338,10 +415,20 @@ class FakeProvider implements BarcodeScannerProvider {
   }
 
   @override
-  Future<void> start() async {}
+  Future<void> start() async {
+    startCount++;
+    if (startError != null) {
+      throw startError!;
+    }
+  }
 
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    stopCount++;
+    if (stopError != null) {
+      throw stopError!;
+    }
+  }
 
   @override
   Stream<BarcodeScanResult> get results => _resultsController.stream;
@@ -353,13 +440,21 @@ class FakeProvider implements BarcodeScannerProvider {
   Stream<ScannerBridgeException> get errors => _errorsController.stream;
 
   @override
+  Stream<ScannerDiagnostics> get diagnostics => _diagnosticsController.stream;
+
+  @override
   Widget buildView({Key? key}) => const SizedBox.shrink();
 
   @override
   Future<void> dispose() async {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
     await _resultsController.close();
     await _statusController.close();
     await _errorsController.close();
+    await _diagnosticsController.close();
   }
 
   void emit(String value) {

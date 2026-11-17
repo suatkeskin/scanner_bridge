@@ -43,6 +43,7 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
   StreamSubscription<BarcodeScanResult>? _resultSubscription;
   StreamSubscription<ScannerStatus>? _statusSubscription;
   StreamSubscription<ScannerBridgeException>? _errorSubscription;
+  StreamSubscription<ScannerDiagnostics>? _diagnosticsSubscription;
 
   ScannerCapabilities? _capabilities;
   ScannerStatus _status = ScannerStatus.unknown;
@@ -50,6 +51,7 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
   DateTime? _lastScanAt;
   int _acceptedScanCount = 0;
   final List<ScannerBridgeException> _errors = [];
+  ScannerDiagnostics? _diagnostics;
 
   @override
   void initState() {
@@ -83,6 +85,11 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
           _errors.removeLast();
         }
       });
+    });
+    _diagnosticsSubscription = scanner.diagnostics.listen((diagnostics) {
+      if (mounted) {
+        setState(() => _diagnostics = diagnostics);
+      }
     });
   }
 
@@ -124,6 +131,7 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
       _lastScanAt = null;
       _acceptedScanCount = 0;
       _errors.clear();
+      _diagnostics = null;
     });
 
     await _cancelScannerSubscriptions();
@@ -145,9 +153,11 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
     await _resultSubscription?.cancel();
     await _statusSubscription?.cancel();
     await _errorSubscription?.cancel();
+    await _diagnosticsSubscription?.cancel();
     _resultSubscription = null;
     _statusSubscription = null;
     _errorSubscription = null;
+    _diagnosticsSubscription = null;
   }
 
   Future<void> _toggleScanner() async {
@@ -316,6 +326,13 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
             '${_duplicateCooldown.inMilliseconds} ms',
             style: theme.textTheme.bodySmall,
           ),
+          if (_diagnostics != null) ...[
+            const SizedBox(height: 12),
+            Text('Diagnostics', style: theme.textTheme.labelLarge),
+            Text('DataWedge version: ${_diagnostics!.dataWedgeVersion ?? '-'}'),
+            Text('Profile: ${_diagnostics!.profileName ?? '-'}'),
+            Text('Application ID: ${_diagnostics!.applicationId ?? '-'}'),
+          ],
           const SizedBox(height: 12),
           Text('Last barcode', style: theme.textTheme.labelLarge),
           SelectableText(_lastBarcode ?? '-'),

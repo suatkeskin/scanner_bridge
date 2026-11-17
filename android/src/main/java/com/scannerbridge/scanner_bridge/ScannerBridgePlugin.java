@@ -11,6 +11,7 @@ import android.os.Bundle;
 import androidx.annotation.NonNull;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
@@ -27,7 +28,6 @@ public class ScannerBridgePlugin extends BroadcastReceiver implements
     private static final String METHOD_CHANNEL = "scanner_bridge/zebra_barcode";
     private static final String EVENT_CHANNEL = "scanner_bridge/zebra_barcode/events";
     private static final String DATAWEDGE_PACKAGE = "com.symbol.datawedge";
-    private static final String DATAWEDGE_ACTION = "com.symbol.datawedge.api.ACTION";
     private static final String SCAN_ACTION = "com.scannerbridge.scanner_bridge.SCAN";
     private static final String NOTIFICATION_ACTION = "com.symbol.datawedge.api.NOTIFICATION_ACTION";
     private static final String RESULT_ACTION = "com.symbol.datawedge.api.RESULT_ACTION";
@@ -115,6 +115,20 @@ public class ScannerBridgePlugin extends BroadcastReceiver implements
             return;
         }
 
+        if (intent.hasExtra(DataWedgeCommandBuilder.RESULT_GET_VERSION_INFO)) {
+            final Bundle versionInfo = intent.getBundleExtra(
+                    DataWedgeCommandBuilder.RESULT_GET_VERSION_INFO);
+            if (versionInfo != null) {
+                final Map<String, Object> event = new HashMap<>();
+                event.put("event", "diagnostics");
+                event.put("dataWedgeVersion", versionInfo.getString("DATAWEDGE"));
+                event.put("profileName", applicationContext.getPackageName());
+                event.put("applicationId", applicationContext.getPackageName());
+                sendEvent(event);
+            }
+            return;
+        }
+
         if (NOTIFICATION_ACTION.equals(intent.getAction()) &&
                 intent.hasExtra("com.symbol.datawedge.api.NOTIFICATION")) {
             final Bundle notification = intent.getBundleExtra(
@@ -126,6 +140,24 @@ public class ScannerBridgePlugin extends BroadcastReceiver implements
             final Map<String, Object> event = new HashMap<>();
             event.put("event", "status");
             event.put("status", notification.getString("STATUS"));
+            sendEvent(event);
+            return;
+        }
+
+        if (RESULT_ACTION.equals(intent.getAction())) {
+            final String result = intent.getStringExtra("RESULT");
+            if (result == null || "SUCCESS".equalsIgnoreCase(result)) {
+                return;
+            }
+            final Map<String, Object> event = new HashMap<>();
+            event.put("event", "error");
+            event.put("command", intent.getStringExtra("COMMAND"));
+            event.put("result", result);
+            event.put("commandIdentifier", intent.getStringExtra("COMMAND_IDENTIFIER"));
+            final Bundle resultInfo = intent.getBundleExtra("RESULT_INFO");
+            if (resultInfo != null) {
+                event.put("resultInfo", bundleToStringMap(resultInfo));
+            }
             sendEvent(event);
         }
     }
@@ -147,21 +179,19 @@ public class ScannerBridgePlugin extends BroadcastReceiver implements
             registerReceiver();
         }
         registerScannerStatusNotification();
-        sendDataWedgeIntentWithExtra("com.symbol.datawedge.api.GET_SCANNER_STATUS", "");
+        sendDataWedgeCommand(DataWedgeCommandBuilder.getVersionInfo());
+        sendDataWedgeCommand(DataWedgeCommandBuilder.getScannerStatus());
         configureProfile();
+        sendDataWedgeCommand(DataWedgeCommandBuilder.scannerInputPlugin("ENABLE_PLUGIN"));
     }
 
     private void stopDataWedge() {
         if (applicationContext == null || !receiverRegistered) {
             return;
         }
-        final Bundle notification = new Bundle();
-        notification.putString("com.symbol.datawedge.api.APPLICATION_NAME",
-                applicationContext.getPackageName());
-        notification.putString("com.symbol.datawedge.api.NOTIFICATION_TYPE", STATUS_NOTIFICATION);
-        final Intent intent = new Intent(DATAWEDGE_ACTION);
-        intent.putExtra("com.symbol.datawedge.api.UNREGISTER_FOR_NOTIFICATION", notification);
-        applicationContext.sendBroadcast(intent);
+        sendDataWedgeCommand(DataWedgeCommandBuilder.scannerInputPlugin("DISABLE_PLUGIN"));
+        sendDataWedgeCommand(
+                DataWedgeCommandBuilder.unregisterScannerStatus(applicationContext.getPackageName()));
 
         applicationContext.unregisterReceiver(this);
         receiverRegistered = false;
@@ -182,59 +212,61 @@ public class ScannerBridgePlugin extends BroadcastReceiver implements
     }
 
     private void registerScannerStatusNotification() {
-        final Bundle notification = new Bundle();
-        notification.putString("com.symbol.datawedge.api.APPLICATION_NAME",
-                applicationContext.getPackageName());
-        notification.putString("com.symbol.datawedge.api.NOTIFICATION_TYPE", STATUS_NOTIFICATION);
-        sendDataWedgeIntentWithExtra(
-                "com.symbol.datawedge.api.REGISTER_FOR_NOTIFICATION", notification);
+        sendDataWedgeCommand(
+                DataWedgeCommandBuilder.registerScannerStatus(applicationContext.getPackageName()));
     }
 
     private void configureProfile() {
-        final String profileName = applicationContext.getPackageName();
-        final Bundle profile = new Bundle();
-        profile.putString("PROFILE_NAME", profileName);
-        profile.putString("PROFILE_ENABLED", "true");
-        profile.putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST");
-
-        final Bundle app = new Bundle();
-        app.putString("PACKAGE_NAME", applicationContext.getPackageName());
-        app.putStringArray("ACTIVITY_LIST", new String[]{"*"});
-        profile.putParcelableArray("APP_LIST", new Bundle[]{app});
-
-        final Bundle barcode = new Bundle();
-        barcode.putString("PLUGIN_NAME", "BARCODE");
-        barcode.putString("RESET_CONFIG", "true");
-        barcode.putBundle("PARAM_LIST", new Bundle());
-        profile.putBundle("PLUGIN_CONFIG", barcode);
-        sendDataWedgeIntentWithExtra("com.symbol.datawedge.api.SET_CONFIG", profile);
-
-        final Bundle intentProfile = new Bundle();
-        intentProfile.putString("PROFILE_NAME", profileName);
-        intentProfile.putString("PROFILE_ENABLED", "true");
-        intentProfile.putString("CONFIG_MODE", "UPDATE");
-        final Bundle intentPlugin = new Bundle();
-        intentPlugin.putString("PLUGIN_NAME", "INTENT");
-        intentPlugin.putString("RESET_CONFIG", "true");
-        final Bundle intentParams = new Bundle();
-        intentParams.putString("intent_output_enabled", "true");
-        intentParams.putString("intent_action", SCAN_ACTION);
-        intentParams.putString("intent_delivery", "2");
-        intentPlugin.putBundle("PARAM_LIST", intentParams);
-        intentProfile.putBundle("PLUGIN_CONFIG", intentPlugin);
-        sendDataWedgeIntentWithExtra("com.symbol.datawedge.api.SET_CONFIG", intentProfile);
+        final String applicationId = applicationContext.getPackageName();
+        sendDataWedgeCommand(DataWedgeCommandBuilder.barcodeProfile(applicationId));
+        sendDataWedgeCommand(DataWedgeCommandBuilder.intentProfile(applicationId, SCAN_ACTION));
     }
 
-    private void sendDataWedgeIntentWithExtra(String key, Object value) {
-        final Intent intent = new Intent(DATAWEDGE_ACTION);
-        if (value instanceof Bundle) {
-            intent.putExtra(key, (Bundle) value);
+    @SuppressWarnings("unchecked")
+    private void sendDataWedgeCommand(DataWedgeCommandBuilder.DataWedgeCommand command) {
+        final Intent intent = new Intent(DataWedgeCommandBuilder.ACTION);
+        final Object value = command.getValue();
+        if (value instanceof Map) {
+            intent.putExtra(command.getExtraKey(), bundleFromMap((Map<String, Object>) value));
         } else {
-            intent.putExtra(key, String.valueOf(value));
+            intent.putExtra(command.getExtraKey(), String.valueOf(value));
         }
         intent.putExtra("SEND_RESULT", "true");
-        intent.putExtra("COMMAND_IDENTIFIER", "scanner_bridge");
+        intent.putExtra("COMMAND_IDENTIFIER", command.getCommandIdentifier());
         applicationContext.sendBroadcast(intent);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Bundle bundleFromMap(Map<String, Object> values) {
+        final Bundle bundle = new Bundle();
+        for (Map.Entry<String, Object> entry : values.entrySet()) {
+            final Object value = entry.getValue();
+            if (value instanceof Map) {
+                bundle.putBundle(entry.getKey(), bundleFromMap((Map<String, Object>) value));
+            } else if (value instanceof List) {
+                final List<?> items = (List<?>) value;
+                final Bundle[] bundles = new Bundle[items.size()];
+                int index = 0;
+                for (Object item : items) {
+                    bundles[index++] = bundleFromMap((Map<String, Object>) item);
+                }
+                bundle.putParcelableArray(entry.getKey(), bundles);
+            } else if (value instanceof String[]) {
+                bundle.putStringArray(entry.getKey(), (String[]) value);
+            } else if (value instanceof String) {
+                bundle.putString(entry.getKey(), (String) value);
+            }
+        }
+        return bundle;
+    }
+
+    private Map<String, String> bundleToStringMap(Bundle bundle) {
+        final Map<String, String> values = new HashMap<>();
+        for (String key : bundle.keySet()) {
+            final Object value = bundle.get(key);
+            values.put(key, String.valueOf(value));
+        }
+        return values;
     }
 
     private void sendEvent(Map<String, Object> event) {

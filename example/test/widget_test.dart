@@ -10,5 +10,6 @@ void main() {
     expect(find.text('Accepted scan count'), findsOneWidget);
     expect(find.text('Camera fallback'), findsOneWidget);
     expect(find.text('Auto / Zebra preferred'), findsOneWidget);
+    expect(find.text('Diagnostics'), findsNothing);
   });
 }

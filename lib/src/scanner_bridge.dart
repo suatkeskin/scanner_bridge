@@ -44,6 +44,7 @@ class ScannerBridge {
   StreamSubscription<BarcodeScanResult>? _resultsSubscription;
   StreamSubscription<ScannerStatus>? _statusSubscription;
   StreamSubscription<ScannerBridgeException>? _errorsSubscription;
+  StreamSubscription<ScannerDiagnostics>? _diagnosticsSubscription;
   bool _initialized = false;
   bool _disposed = false;
   String? _lastScanValue;
@@ -64,6 +65,12 @@ class ScannerBridge {
 
   /// Normalized errors from the selected provider.
   Stream<ScannerBridgeException> get errors => _errorsController.stream;
+
+  /// Provider-specific diagnostic information.
+  Stream<ScannerDiagnostics> get diagnostics => _diagnosticsController.stream;
+
+  final StreamController<ScannerDiagnostics> _diagnosticsController =
+      StreamController<ScannerDiagnostics>.broadcast();
 
   /// Selects and initializes the best available provider.
   Future<ScannerCapabilities> initialize() async {
@@ -107,32 +114,29 @@ class ScannerBridge {
     }
 
     try {
-      _activeProvider = selectedProvider;
-      _resultsSubscription = selectedProvider.results.listen(
-        _handleResult,
-      );
-      _statusSubscription =
-          selectedProvider.status.listen(_statusController.add);
-      _errorsSubscription =
-          selectedProvider.errors.listen(_errorsController.add);
+      _listenToProvider(selectedProvider);
       _capabilities = await selectedProvider.initialize();
       _initialized = true;
       return _capabilities!;
     } catch (error) {
+      await _cancelProviderSubscriptions();
+      if (identical(selectedProvider, _zebraProvider) && allowCameraFallback) {
+        try {
+          await _switchToCameraFallback();
+          _initialized = true;
+          return _capabilities!;
+        } catch (fallbackError) {
+          _emitInitializationError(fallbackError);
+          rethrow;
+        }
+      }
       final bridgeError = error is ScannerBridgeException
           ? error
           : ScannerBridgeException(
               'initialize_failed',
               'Unable to initialize the scanner: $error',
             );
-      _statusController.add(ScannerStatus.error);
-      _errorsController.add(bridgeError);
-      await _resultsSubscription?.cancel();
-      await _statusSubscription?.cancel();
-      await _errorsSubscription?.cancel();
-      _resultsSubscription = null;
-      _statusSubscription = null;
-      _errorsSubscription = null;
+      _emitInitializationError(bridgeError);
       rethrow;
     }
   }
@@ -140,7 +144,15 @@ class ScannerBridge {
   /// Starts capture on the selected provider.
   Future<void> start() async {
     _ensureInitialized();
-    await _activeProvider!.start();
+    try {
+      await _activeProvider!.start();
+    } catch (error) {
+      if (!identical(_activeProvider, _zebraProvider) || !allowCameraFallback) {
+        rethrow;
+      }
+      await _switchToCameraFallback();
+      await _activeProvider!.start();
+    }
   }
 
   /// Stops capture on the selected provider.
@@ -164,6 +176,7 @@ class ScannerBridge {
     await _resultsSubscription?.cancel();
     await _statusSubscription?.cancel();
     await _errorsSubscription?.cancel();
+    await _diagnosticsSubscription?.cancel();
     await _activeProvider?.dispose();
     if (!identical(_activeProvider, _zebraProvider)) {
       await _zebraProvider.dispose();
@@ -174,6 +187,7 @@ class ScannerBridge {
     await _resultsController.close();
     await _statusController.close();
     await _errorsController.close();
+    await _diagnosticsController.close();
   }
 
   void _handleResult(BarcodeScanResult result) {
@@ -202,5 +216,44 @@ class ScannerBridge {
     if (_disposed) {
       throw StateError('ScannerBridge has already been disposed.');
     }
+  }
+
+  void _listenToProvider(BarcodeScannerProvider provider) {
+    _activeProvider = provider;
+    _resultsSubscription = provider.results.listen(_handleResult);
+    _statusSubscription = provider.status.listen(_statusController.add);
+    _errorsSubscription = provider.errors.listen(_errorsController.add);
+    _diagnosticsSubscription =
+        provider.diagnostics.listen(_diagnosticsController.add);
+  }
+
+  Future<void> _cancelProviderSubscriptions() async {
+    await _resultsSubscription?.cancel();
+    await _statusSubscription?.cancel();
+    await _errorsSubscription?.cancel();
+    await _diagnosticsSubscription?.cancel();
+    _resultsSubscription = null;
+    _statusSubscription = null;
+    _errorsSubscription = null;
+    _diagnosticsSubscription = null;
+  }
+
+  void _emitInitializationError(Object error) {
+    final bridgeError = error is ScannerBridgeException
+        ? error
+        : ScannerBridgeException(
+            'initialize_failed',
+            'Unable to initialize the scanner: $error',
+          );
+    _statusController.add(ScannerStatus.error);
+    _errorsController.add(bridgeError);
+  }
+
+  Future<void> _switchToCameraFallback() async {
+    await _cancelProviderSubscriptions();
+    await _activeProvider?.dispose();
+    _statusController.add(ScannerStatus.initializing);
+    _listenToProvider(_cameraProvider);
+    _capabilities = await _cameraProvider.initialize();
   }
 }
