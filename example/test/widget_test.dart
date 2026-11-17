@@ -8,5 +8,7 @@ void main() {
     expect(find.text('scanner_bridge example'), findsOneWidget);
     expect(find.text('Last barcode'), findsOneWidget);
     expect(find.text('Accepted scan count'), findsOneWidget);
+    expect(find.text('Camera fallback'), findsOneWidget);
+    expect(find.text('Auto / Zebra preferred'), findsOneWidget);
   });
 }
