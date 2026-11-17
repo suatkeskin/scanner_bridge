@@ -31,10 +31,15 @@ class ScannerExamplePage extends StatefulWidget {
   State<ScannerExamplePage> createState() => _ScannerExamplePageState();
 }
 
+enum _ScannerMode { cameraFallback, auto }
+
 class _ScannerExamplePageState extends State<ScannerExamplePage> {
   static const _duplicateCooldown = Duration(milliseconds: 800);
 
-  late final ScannerBridge _scanner;
+  ScannerBridge? _scanner;
+  _ScannerMode _mode = _ScannerMode.cameraFallback;
+  bool _isSwitchingMode = false;
+  bool _isInitializing = true;
   StreamSubscription<BarcodeScanResult>? _resultSubscription;
   StreamSubscription<ScannerStatus>? _statusSubscription;
   StreamSubscription<ScannerBridgeException>? _errorSubscription;
@@ -49,18 +54,11 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
   @override
   void initState() {
     super.initState();
-    _scanner = ScannerBridge(
-      // Force the camera provider so this example is useful on any Android
-      // device, including devices without Zebra DataWedge.
-      preferZebra: false,
-      duplicateScanCooldown: _duplicateCooldown,
-    );
-    _listenToScanner();
     _initializeScanner();
   }
 
-  void _listenToScanner() {
-    _resultSubscription = _scanner.results.listen((result) {
+  void _listenToScanner(ScannerBridge scanner) {
+    _resultSubscription = scanner.results.listen((result) {
       if (!mounted) {
         return;
       }
@@ -70,12 +68,12 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
         _acceptedScanCount++;
       });
     });
-    _statusSubscription = _scanner.status.listen((status) {
+    _statusSubscription = scanner.status.listen((status) {
       if (mounted) {
         setState(() => _status = status);
       }
     });
-    _errorSubscription = _scanner.errors.listen((error) {
+    _errorSubscription = scanner.errors.listen((error) {
       if (!mounted) {
         return;
       }
@@ -89,26 +87,79 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
   }
 
   Future<void> _initializeScanner() async {
+    final scanner = ScannerBridge(
+      preferZebra: _mode == _ScannerMode.auto,
+      duplicateScanCooldown: _duplicateCooldown,
+    );
+    _scanner = scanner;
+    _listenToScanner(scanner);
     try {
-      final capabilities = await _scanner.initialize();
+      final capabilities = await scanner.initialize();
       if (!mounted) {
         return;
       }
       setState(() => _capabilities = capabilities);
-      await _scanner.start();
+      await scanner.start();
     } on Object catch (error) {
       if (mounted) {
         _addLocalError(error, code: 'example_initialization_failed');
       }
+    } finally {
+      if (mounted) {
+        setState(() => _isInitializing = false);
+      }
     }
   }
 
+  Future<void> _switchMode(_ScannerMode mode) async {
+    if (_isSwitchingMode || mode == _mode) {
+      return;
+    }
+    setState(() {
+      _mode = mode;
+      _isSwitchingMode = true;
+      _capabilities = null;
+      _status = ScannerStatus.unknown;
+      _lastBarcode = null;
+      _lastScanAt = null;
+      _acceptedScanCount = 0;
+      _errors.clear();
+    });
+
+    await _cancelScannerSubscriptions();
+    await _scanner?.dispose();
+    _scanner = null;
+    if (!mounted) {
+      return;
+    }
+    try {
+      await _initializeScanner();
+    } finally {
+      if (mounted) {
+        setState(() => _isSwitchingMode = false);
+      }
+    }
+  }
+
+  Future<void> _cancelScannerSubscriptions() async {
+    await _resultSubscription?.cancel();
+    await _statusSubscription?.cancel();
+    await _errorSubscription?.cancel();
+    _resultSubscription = null;
+    _statusSubscription = null;
+    _errorSubscription = null;
+  }
+
   Future<void> _toggleScanner() async {
+    final scanner = _scanner;
+    if (scanner == null) {
+      return;
+    }
     try {
       if (_status == ScannerStatus.scanning || _status == ScannerStatus.ready) {
-        await _scanner.stop();
+        await scanner.stop();
       } else {
-        await _scanner.start();
+        await scanner.start();
       }
     } on Object catch (error) {
       _addLocalError(error, code: 'example_action_failed');
@@ -129,10 +180,8 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
 
   @override
   void dispose() {
-    _resultSubscription?.cancel();
-    _statusSubscription?.cancel();
-    _errorSubscription?.cancel();
-    unawaited(_scanner.dispose());
+    unawaited(_cancelScannerSubscriptions());
+    unawaited(_scanner?.dispose());
     super.dispose();
   }
 
@@ -184,12 +233,16 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
         ),
       );
     }
+    final scanner = _scanner;
+    if (scanner == null) {
+      return const ColoredBox(color: Colors.black);
+    }
     return ColoredBox(
       color: Colors.black,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          _scanner.buildView(),
+          scanner.buildView(),
           Center(
             child: Container(
               width: 260,
@@ -211,6 +264,10 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
   ) {
     final theme = Theme.of(context);
     final lastScan = _lastScanAt;
+    final modeDescription = switch (_mode) {
+      _ScannerMode.cameraFallback => 'Camera provider is forced.',
+      _ScannerMode.auto => 'Zebra is preferred on supported Android devices; camera fallback is automatic.',
+    };
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -230,9 +287,32 @@ class _ScannerExamplePageState extends State<ScannerExamplePage> {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Text('Provider mode', style: theme.textTheme.labelLarge),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('Camera fallback'),
+                selected: _mode == _ScannerMode.cameraFallback,
+                onSelected: _isSwitchingMode || _isInitializing
+                    ? null
+                    : (_) =>
+                          unawaited(_switchMode(_ScannerMode.cameraFallback)),
+              ),
+              ChoiceChip(
+                label: const Text('Auto / Zebra preferred'),
+                selected: _mode == _ScannerMode.auto,
+                onSelected: _isSwitchingMode || _isInitializing
+                    ? null
+                    : (_) => unawaited(_switchMode(_ScannerMode.auto)),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
-            'Camera fallback is forced. Duplicate cooldown: '
+            '$modeDescription Duplicate cooldown: '
             '${_duplicateCooldown.inMilliseconds} ms',
             style: theme.textTheme.bodySmall,
           ),
